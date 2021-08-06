@@ -9,6 +9,7 @@ from typing import Optional, Type
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException
 from fastapi.params import Param
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from multiprocessing import Process
 from redis import Redis
@@ -52,6 +53,15 @@ class Parameters(BaseModel):
     ValueHigh: int = 5
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 client = docker.from_env() 
 
 # queue
