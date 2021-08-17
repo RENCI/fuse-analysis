@@ -43,7 +43,7 @@ class Parameters(BaseModel):
     SampleNumber: int = 32
     Ref: str = "MT_recon_2_2_entrez.mat"
     ThreshType: str = "local"
-    PercentileOrValue: str = "percentile"
+    PercentileOrValue: str = "value"
     Percentile: int = 25
     Value: int = 5
     LocalThresholdType: str = "minmaxmean"
