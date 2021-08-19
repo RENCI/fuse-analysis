@@ -6,9 +6,9 @@ import docker
 import time
 import inspect
 from typing import Optional, Type
-from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, responses
 from fastapi.params import Param
-from fastapi.responses import FileResponse
+from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from multiprocessing import Process
@@ -95,7 +95,12 @@ def get_task_result(task_id: str, name: str):
     file_path = os.path.join(dir_path, f"{name}.csv")
     if not os.path.isdir(dir_path) or len(os.listdir(dir_path)) == 0:
         raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(file_path)
+    def iterfile():  
+        with open(file_path, mode="rb") as file_data:
+            yield from file_data  
+    response = StreamingResponse(iterfile(), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=export.csv"
+    return response
 
 def run_cellfie_image(task_id: str, parameters: Parameters):
     local_path = os.getenv('HOST_ABSOLUTE_PATH')
