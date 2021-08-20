@@ -1,25 +1,21 @@
-import json
 import os
 import aiofiles
 import uuid
 import docker
-import time
 import inspect
 from typing import Optional, Type
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, responses
 from fastapi.params import Param
+import redis
 from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from multiprocessing import Process
 from redis import Redis
 from rq import Connection, Queue, Worker
+from rq.job import Job
 
 def as_form(cls: Type[BaseModel]):
-    """
-    Adds an as_form class method to decorated models. The as_form class method
-    can be used with FastAPI endpoints
-    """
     new_params = [
         inspect.Parameter(
             field.alias,
@@ -69,16 +65,17 @@ redis_connection = Redis(host='redis', port=6379, db=0)
 q = Queue(connection=redis_connection, is_async=True)
 
 def initWorker():
-    worker = Worker(Queue(connection=redis_connection), connection=redis_connection)
+    worker = Worker(q, connection=redis_connection)
     worker.work()
 
 @app.post("/cellfie/run/upload_data")
 async def run_with_uploaded_data(parameters: Parameters = Depends(Parameters.as_form), data: UploadFile = File(...)):
     #write data to memory
-    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tmp")
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     task_id = str(uuid.uuid4())
-    filename = f"{task_id}-input.csv"
-    file_path = os.path.join(local_path, filename)
+    local_path = os.path.join(local_path, f"{task_id}-data")
+    os.mkdir(local_path)
+    file_path = os.path.join(local_path, "input.csv")
     async with aiofiles.open(file_path, 'wb') as out_file:
         content = await data.read()
         await out_file.write(content)
@@ -88,37 +85,44 @@ async def run_with_uploaded_data(parameters: Parameters = Depends(Parameters.as_
     pWorker.start()
     return {"task_id": task_id}
 
-@app.get("/cellfie/results/{task_id}/{name}")
-def get_task_result(task_id: str, name: str):
-    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tmp")
-    dir_path = os.path.join(local_path, f"{task_id}-output")
-    file_path = os.path.join(dir_path, f"{name}.csv")
-    if not os.path.isdir(dir_path) or len(os.listdir(dir_path)) == 0:
+@app.get("/cellfie/status/{task_id}")
+def get_task_status(task_id: str):
+    try:
+        job = Job.fetch(task_id, connection=redis_connection)
+        return {"task_status": job.get_status()}
+    except:
         raise HTTPException(status_code=404, detail="Not found")
-    def iterfile():  
-        with open(file_path, mode="rb") as file_data:
-            yield from file_data  
+
+@app.get("/cellfie/results/{task_id}/{filename}")
+def get_task_result(task_id: str, filename: str):
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    dir_path = os.path.join(local_path, f"{task_id}-data")
+    file_path = os.path.join(dir_path, f"{filename}.csv")
+    if not os.path.isdir(dir_path) or len(os.listdir(dir_path)) < 5:
+        raise HTTPException(status_code=404, detail="Not found")
+    def iterfile():
+        try:
+            with open(file_path, mode="rb") as file_data:
+                yield from file_data
+        except:
+            raise Exception()
     response = StreamingResponse(iterfile(), media_type="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=export.csv"
     return response
 
 def run_cellfie_image(task_id: str, parameters: Parameters):
     local_path = os.getenv('HOST_ABSOLUTE_PATH')
-    filename = f"{task_id}-input.csv"
 
     global_value = parameters.Percentile if parameters.PercentileOrValue == "percentile" else parameters.Value
     local_values = f"{parameters.PercentileLow} {parameters.PercentileHigh}" if parameters.PercentileOrValue == "percentile" else f"{parameters.ValueLow} {parameters.ValueHigh}"
 
     client.containers.run("hmasson/cellfie-standalone-app:latest",
         volumes={
-            os.path.join(local_path, f".tmp/{filename}"): {'bind': '/HPA.csv', 'mode': 'rw'},
+            os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
             os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
-            os.path.join(local_path, f".tmp/{task_id}-output"): {'bind': '/outtmp', 'mode': 'rw'}
         },
-        detach=True,
         working_dir="/input",
         privileged=True,
         remove=True,
-        command=f"../HPA.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} ../outtmp"
+        command=f"/data/input.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
     )
-    return task_id

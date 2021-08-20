@@ -21,6 +21,6 @@ services:
         - 8000:8000
     volumes:
         - /var/run/docker.sock:/var/run/docker.sock
-        - ./.tmp:/app/.tmp
+        - ./data:/app/data
     depends_on:
         - redis
