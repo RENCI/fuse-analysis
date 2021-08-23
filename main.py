@@ -121,6 +121,7 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
             os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
             os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
         },
+        name=task_id,
         working_dir="/input",
         privileged=True,
         remove=True,
