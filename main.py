@@ -1,12 +1,10 @@
 import os
-import aiofiles
 import uuid
 import docker
 import inspect
-from typing import Optional, Type
+from typing import Optional, Type, List
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, responses
 from fastapi.params import Param
-import redis
 from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 def collection():
     return os.environ["IRODS_COLLECTION"]
-
 
 def open_session():
     host = os.environ["IRODS_HOST"]
@@ -100,17 +97,36 @@ def as_form(cls: Type[BaseModel]):
 
 @as_form
 class Parameters(BaseModel):
-    SampleNumber: int = 32
-    Ref: str = "MT_recon_2_2_entrez.mat"
-    ThreshType: str = "local"
-    PercentileOrValue: str = "value"
-    Percentile: int = 25
-    Value: int = 5
-    LocalThresholdType: str = "minmaxmean"
-    PercentileLow: int = 25
-    PercentileHigh: int = 75
-    ValueLow: int = 5
-    ValueHigh: int = 5
+    Container: str = "hmasson/cellfie-standalone-app"
+    ContainerTag: str = "latest"
+    ArgumentsKeys: List[str] = [
+        "SampleNumber",
+        "Ref",
+        "ThreshType",
+        "PercentileOrValue",
+        "Percentile",
+        "Value",
+        "LocalThresholdType",
+        "PercentileLow",
+        "PercentileHigh",
+        "ValueLow",
+        "ValueHigh"
+    ]
+    ArgumentsValues: List[str] = [
+        "32",
+        "MT_recon_2_2_entrez.mat",
+        "local",
+        "value",
+        "25",
+        "5",
+        "minmaxmean",
+        "25",
+        "75",
+        "5",
+        "5"
+    ]
+    Command: str = "INPUT {SampleNumber} {Ref} {ThreshType} {PercentileOrValue} {Value} {LocalThresholdType} {ValueLow} {ValueHigh} OUTPUT"
+
 
 app = FastAPI()
 
@@ -178,18 +194,22 @@ def get_task_result(task_id: str, filename: str):
 
 def run_cellfie_image(task_id: str, parameters: Parameters):
     local_path = os.getenv('HOST_ABSOLUTE_PATH')
-
-    global_value = parameters.Percentile if parameters.PercentileOrValue == "percentile" else parameters.Value
-    local_values = f"{parameters.PercentileLow} {parameters.PercentileHigh}" if parameters.PercentileOrValue == "percentile" else f"{parameters.ValueLow} {parameters.ValueHigh}"
+    parameters_dict = dict(zip(parameters.ArgumentsKeys, parameters.ArgumentsValues))
 
     data_dir = "data"
     data_dir_task = f"{task_id}-data"
     container_data_dir = os.path.join("/app", data_dir)
     irods_data_dir_task = os.path.join(collection(), data_dir, data_dir_task)
 
+    parsed_command = parameters.Command
+    parsed_command.replace("INPUT", "/data/input.csv")
+    parsed_command.replace("OUTPUT", "/data")
+
+    #TODO: parse the arguments
+
     with open_session() as sess:
         get(sess, irods_data_dir_task, container_data_dir, recursive=True)
-        client.containers.run("hmasson/cellfie-standalone-app:latest",
+        client.containers.run(f"{parameters.Container}:{parameters.ContainerTag}",
                               volumes={
                                   os.path.join(local_path, data_dir, data_dir_task) : {'bind': '/data', 'mode': 'rw'},
                                   os.path.join(local_path, "CellFie/input") : {'bind': '/input', 'mode': 'rw'},
@@ -198,7 +218,7 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
                               working_dir="/input",
                               privileged=True,
                               remove=True,
-                              command=f"/data/input.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
+                              command=parsed_command
         )
         output_dir = os.path.join(container_data_dir, data_dir_task)
         for filename in os.listdir(output_dir):
