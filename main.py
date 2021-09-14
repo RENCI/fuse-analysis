@@ -223,3 +223,14 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
         output_dir = os.path.join(container_data_dir, data_dir_task)
         for filename in os.listdir(output_dir):
             put_object(sess, local_path=os.path.join(output_dir, filename), irods_path=os.path.join(irods_data_dir_task, filename))
+
+def pull_imm_group(group_id: str, api_key: str):
+    container = client.containers.run(
+        "txscience/tx-immunespace-groups:0.2",
+        remove=True,
+        command=f"./ImmGeneBySampleMatrix.R -g {group_id} -a {api_key}"
+    )
+    return container.logs()
+
+if __name__ == "__main__":
+    print(pull_imm_group("group_id", "api_key"))
