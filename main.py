@@ -116,7 +116,7 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
     global_value = parameters.Percentile if parameters.PercentileOrValue == "percentile" else parameters.Value
     local_values = f"{parameters.PercentileLow} {parameters.PercentileHigh}" if parameters.PercentileOrValue == "percentile" else f"{parameters.ValueLow} {parameters.ValueHigh}"
 
-    client.containers.run("hmasson/cellfie-standalone-app:latest",
+    client.containers.run("hmasson/cellfie-standalone-app:v2",
         volumes={
             os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
             os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
