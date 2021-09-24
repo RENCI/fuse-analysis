@@ -12,11 +12,22 @@ services:
       - 6379
     command: ["--appendonly", "yes"]
 
+  tx-persistence:
+    container_name: tx-persistence
+    image: txscience/tx-persistence
+    restart: always
+    env_file:
+      - .env
+    expose:
+      - 27017
+      - 27018
+      - 27019
+
   api:
     container_name: api
     build: .
     restart: always
-    env_file: .env.sample
+    env_file: .env
     ports:
         - 8000:8000
     volumes:
@@ -24,3 +35,4 @@ services:
         - ./data:/app/data
     depends_on:
         - redis
+        - tx-persistence
