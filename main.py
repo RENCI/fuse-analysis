@@ -4,7 +4,6 @@ import uuid
 import docker
 import inspect
 import pymongo
-import json
 from typing import Optional, Type
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, responses
 from fastapi.params import Param
@@ -52,9 +51,6 @@ class Parameters(BaseModel):
     ValueLow: int = 5
     ValueHigh: int = 5
 
-    def toJSON(self):
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
-
 
 app = FastAPI()
 
@@ -96,9 +92,9 @@ async def run_with_uploaded_data(email: str, parameters: Parameters = Depends(Pa
     os.mkdir(local_path)
 
     param_path = os.path.join(local_path, "parameters.json")
-    param_data = parameters.toJSON().replace('\n', '')
     with open(param_path, 'w', encoding='utf-8') as f:
-        json.dump(param_data, f, ensure_ascii=False, indent=4)
+        f.write(parameters.json())
+    f.close()
 
     file_path = os.path.join(local_path, "input.csv")
     async with aiofiles.open(file_path, 'wb') as out_file:
@@ -111,6 +107,7 @@ async def run_with_uploaded_data(email: str, parameters: Parameters = Depends(Pa
     pWorker.start()
     return {"task_id": task_id}
 
+
 @app.get("/cellfie/get_run_parameters/{task_id}")
 async def get_run_parameters(task_id: str):
 
@@ -119,9 +116,12 @@ async def get_run_parameters(task_id: str):
 
     param_path = os.path.join(local_path, "parameters.json")
     with open(param_path) as f:
-        loaded_json = json.load(f)
+        param_path_contents = eval(f.read())
+    f.close()
 
-    return loaded_json
+    parameter_object = Parameters(**param_path_contents)
+    return parameter_object.json()
+
 
 @app.get("/cellfie/get_task_ids/{email}")
 async def get_task_ids(email: str):
