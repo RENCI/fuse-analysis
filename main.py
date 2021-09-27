@@ -120,7 +120,7 @@ async def get_run_parameters(task_id: str):
     f.close()
 
     parameter_object = Parameters(**param_path_contents)
-    return parameter_object.json()
+    return parameter_object.dict()
 
 
 @app.get("/cellfie/get_task_ids/{email}")
@@ -128,6 +128,7 @@ async def get_task_ids(email: str):
     query = {"email": email}
     ret = list(map(lambda a: a, mongo_db_email_task_mapping_column.find(query, {"_id": 0, "task_id": 1})))
     return ret
+
 
 @app.get("/cellfie/status/{task_id}")
 def get_task_status(task_id: str):
