@@ -102,7 +102,7 @@ async def run_with_uploaded_data(email: str, parameters: Parameters = Depends(Pa
         await out_file.write(content)
 
     # instantiate task
-    q.enqueue(run_cellfie_image, task_id=task_id, parameters=parameters, job_id=task_id, job_timeout=600)
+    q.enqueue(run_cellfie_image, task_id=task_id, parameters=parameters, job_id=task_id, job_timeout=600, result_ttl=-1)
     pWorker = Process(target=initWorker)
     pWorker.start()
     return {"task_id": task_id}
