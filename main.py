@@ -1,21 +1,21 @@
-import os
-import aiofiles
-import uuid
-import docker
 import inspect
+import os
+import uuid
+from multiprocessing import Process
+from typing import Type, Optional
+import shutil
+import aiofiles
+import docker
 import pymongo
-from typing import Optional, Type
-from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, responses
-from fastapi.params import Param
-import redis
-from starlette.responses import StreamingResponse
+from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from multiprocessing import Process
 from redis import Redis
-from rq import Connection, Queue, Worker
+from rq import Queue, Worker
 from rq.job import Job
-
+from starlette.responses import StreamingResponse
+import datetime
+from bson.json_util import dumps
 
 def as_form(cls: Type[BaseModel]):
     new_params = [
@@ -68,7 +68,8 @@ client = docker.from_env()
 redis_connection = Redis(host='redis', port=6379, db=0)
 q = Queue(connection=redis_connection, is_async=True)
 
-mongo_client = pymongo.MongoClient('mongodb://%s:%s@tx-persistence:27017/test' % (os.getenv('MONGO_NON_ROOT_USERNAME'), os.getenv('MONGO_NON_ROOT_PASSWORD')))
+mongo_client = pymongo.MongoClient('mongodb://%s:%s@tx-persistence:27017/test' % (
+    os.getenv('MONGO_NON_ROOT_USERNAME'), os.getenv('MONGO_NON_ROOT_PASSWORD')))
 mongo_db = mongo_client["test"]
 mongo_db_email_task_mapping_column = mongo_db["email_task_mapping"]
 
@@ -78,14 +79,14 @@ def initWorker():
     worker.work()
 
 
-@app.post("/cellfie/run/upload_data")
-async def run_with_uploaded_data(email: str, parameters: Parameters = Depends(Parameters.as_form),
-                                 data: UploadFile = File(...)):
+@app.post("/cellfie/task/submit")
+async def submit_task(email: str, parameters: Parameters = Depends(Parameters.as_form),
+                                 expression_data: UploadFile = File(...), phenotype_data: Optional[bytes] = File(None)):
     # write data to memory
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     task_id = str(uuid.uuid4())
 
-    email_task_mapping_entry = {"email": email, "task_id": task_id}
+    email_task_mapping_entry = {"email": email, "task_id": task_id, "status": None, "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
     mongo_db_email_task_mapping_column.insert_one(email_task_mapping_entry)
 
     local_path = os.path.join(local_path, f"{task_id}-data")
@@ -98,8 +99,13 @@ async def run_with_uploaded_data(email: str, parameters: Parameters = Depends(Pa
 
     file_path = os.path.join(local_path, "input.csv")
     async with aiofiles.open(file_path, 'wb') as out_file:
-        content = await data.read()
+        content = await expression_data.read()
         await out_file.write(content)
+
+    if phenotype_data is not None:
+        phenotype_data_file_path = os.path.join(local_path, "phenotypes.csv")
+        async with aiofiles.open(phenotype_data_file_path, 'wb') as out_file:
+            await out_file.write(phenotype_data)
 
     # instantiate task
     q.enqueue(run_cellfie_image, task_id=task_id, parameters=parameters, job_id=task_id, job_timeout=600, result_ttl=-1)
@@ -108,9 +114,21 @@ async def run_with_uploaded_data(email: str, parameters: Parameters = Depends(Pa
     return {"task_id": task_id}
 
 
-@app.get("/cellfie/get_run_parameters/{task_id}")
-async def get_run_parameters(task_id: str):
+@app.post("/cellfie/task/delete/{task_id}")
+async def delete_task(task_id: str):
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
+    task_query = {"task_id": task_id}
+    mongo_db_email_task_mapping_column.delete_one(task_query)
+
+    local_path = os.path.join(local_path, f"{task_id}-data")
+    shutil.rmtree(local_path)
+
+    return {"status": "done"}
+
+
+@app.get("/cellfie/task/parameters/{task_id}")
+async def get_task_parameters(task_id: str):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     local_path = os.path.join(local_path, f"{task_id}-data")
 
@@ -123,23 +141,35 @@ async def get_run_parameters(task_id: str):
     return parameter_object.dict()
 
 
-@app.get("/cellfie/get_task_ids/{email}")
+@app.get("/cellfie/task/ids/{email}")
 async def get_task_ids(email: str):
     query = {"email": email}
     ret = list(map(lambda a: a, mongo_db_email_task_mapping_column.find(query, {"_id": 0, "task_id": 1})))
     return ret
 
 
-@app.get("/cellfie/status/{task_id}")
+@app.get("/cellfie/task/status/{task_id}")
 def get_task_status(task_id: str):
     try:
         job = Job.fetch(task_id, connection=redis_connection)
-        return {"task_status": job.get_status()}
+        ret = {"status": job.get_status()}
+        task_mapping_entry = {"task_id": task_id}
+        newvalues = {"$set": ret}
+        mongo_db_email_task_mapping_column.update_one(task_mapping_entry, newvalues)
+        return ret
     except:
         raise HTTPException(status_code=404, detail="Not found")
 
+@app.get("/cellfie/task/metadata/{task_id}")
+def get_task_metadata(task_id: str):
+    try:
+        task_mapping_entry = {"task_id": task_id}
+        entry = mongo_db_email_task_mapping_column.find(task_mapping_entry, {"_id": 0, "task_id": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1})
+        return list(entry)
+    except:
+        raise HTTPException(status_code=404, detail="Not found")
 
-@app.get("/cellfie/results/{task_id}/{filename}")
+@app.get("/cellfie/task/results/{task_id}/{filename}")
 def get_task_result(task_id: str, filename: str):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     dir_path = os.path.join(local_path, f"{task_id}-data")
@@ -162,6 +192,10 @@ def get_task_result(task_id: str, filename: str):
 def run_cellfie_image(task_id: str, parameters: Parameters):
     local_path = os.getenv('HOST_ABSOLUTE_PATH')
 
+    task_mapping_entry = {"task_id": task_id}
+    newvalues = {"$set": {"start_date": datetime.datetime.utcnow()}}
+    mongo_db_email_task_mapping_column.update_one(task_mapping_entry, newvalues)
+
     global_value = parameters.Percentile if parameters.PercentileOrValue == "percentile" else parameters.Value
     local_values = f"{parameters.PercentileLow} {parameters.PercentileHigh}" if parameters.PercentileOrValue == "percentile" else f"{parameters.ValueLow} {parameters.ValueHigh}"
 
@@ -176,3 +210,6 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
                           remove=True,
                           command=f"/data/input.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
                           )
+
+    newvalues = {"$set": {"end_date": datetime.datetime.utcnow()}}
+    mongo_db_email_task_mapping_column.update_one(task_mapping_entry, newvalues)
