@@ -15,7 +15,7 @@ from rq import Queue, Worker
 from rq.job import Job
 from starlette.responses import StreamingResponse
 import datetime
-from bson.json_util import dumps
+from bson.json_util import dumps, loads
 
 def as_form(cls: Type[BaseModel]):
     new_params = [
@@ -165,7 +165,7 @@ def get_task_metadata(task_id: str):
     try:
         task_mapping_entry = {"task_id": task_id}
         entry = mongo_db_email_task_mapping_column.find(task_mapping_entry, {"_id": 0, "task_id": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1})
-        return list(entry)
+        return loads(dumps(entry.next()))
     except:
         raise HTTPException(status_code=404, detail="Not found")
 
