@@ -7,7 +7,7 @@ import shutil
 import aiofiles
 import docker
 import pymongo
-from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, Path
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
@@ -114,7 +114,7 @@ async def submit_task(email: str, parameters: Parameters = Depends(Parameters.as
     return {"task_id": task_id}
 
 
-@app.post("/cellfie/task/delete/{task_id}")
+@app.delete("/cellfie/task/delete/{task_id}")
 async def delete_task(task_id: str):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
@@ -170,7 +170,7 @@ def get_task_metadata(task_id: str):
         raise HTTPException(status_code=404, detail="Not found")
 
 @app.get("/cellfie/task/results/{task_id}/{filename}")
-def get_task_result(task_id: str, filename: str):
+def get_task_result(task_id: str, filename: str = Path(..., description="Valid file name values include: detailScoring, input, phenotypes, score, score_binary, & taskInfo")):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     dir_path = os.path.join(local_path, f"{task_id}-data")
     file_path = os.path.join(dir_path, f"{filename}.csv")
