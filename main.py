@@ -8,6 +8,7 @@ import aiofiles
 import docker
 import pymongo
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, Path
+from fastapi import logger
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
@@ -16,6 +17,7 @@ from rq.job import Job
 from starlette.responses import StreamingResponse
 import datetime
 from bson.json_util import dumps, loads
+
 
 def as_form(cls: Type[BaseModel]):
     new_params = [
@@ -66,7 +68,7 @@ client = docker.from_env()
 
 # queue
 redis_connection = Redis(host='redis', port=6379, db=0)
-q = Queue(connection=redis_connection, is_async=True)
+q = Queue(connection=redis_connection, is_async=True, default_timeout=3600)
 
 mongo_client = pymongo.MongoClient('mongodb://%s:%s@tx-persistence:27017/test' % (
     os.getenv('MONGO_NON_ROOT_USERNAME'), os.getenv('MONGO_NON_ROOT_PASSWORD')))
@@ -79,14 +81,15 @@ def initWorker():
     worker.work()
 
 
-@app.post("/cellfie/task/submit")
-async def submit_task(email: str, parameters: Parameters = Depends(Parameters.as_form),
-                                 expression_data: UploadFile = File(...), phenotype_data: Optional[bytes] = File(None)):
+@app.post("/cellfie/task/submit_cellfie")
+async def submit_cellfie_task(email: str, parameters: Parameters = Depends(Parameters.as_form),
+                              expression_data: UploadFile = File(...), phenotype_data: Optional[bytes] = File(None)):
     # write data to memory
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     task_id = str(uuid.uuid4())
 
-    email_task_mapping_entry = {"email": email, "task_id": task_id, "status": None, "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
+    email_task_mapping_entry = {"email": email, "task_id": task_id, "status": None,
+                                "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
     mongo_db_email_task_mapping_column.insert_one(email_task_mapping_entry)
 
     local_path = os.path.join(local_path, f"{task_id}-data")
@@ -108,7 +111,40 @@ async def submit_task(email: str, parameters: Parameters = Depends(Parameters.as
             await out_file.write(phenotype_data)
 
     # instantiate task
-    q.enqueue(run_cellfie_image, task_id=task_id, parameters=parameters, job_id=task_id, job_timeout=600, result_ttl=-1)
+    q.enqueue(run_cellfie_image, task_id=task_id, parameters=parameters, job_id=task_id, job_timeout=3600, result_ttl=-1)
+    pWorker = Process(target=initWorker)
+    pWorker.start()
+    return {"task_id": task_id}
+
+
+@app.post("/cellfie/task/submit_immunespace_cellfie")
+async def submit_immunespace_cellfie_task(email: str, group: str, apikey: str,
+                                          parameters: Parameters = Depends(Parameters.as_form),
+                                          phenotype_data: Optional[bytes] = File(None)):
+    # write data to memory
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    task_id = str(uuid.uuid4())
+
+    email_task_mapping_entry = {"email": email, "task_id": task_id, "status": None,
+                                "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
+    mongo_db_email_task_mapping_column.insert_one(email_task_mapping_entry)
+
+    local_path = os.path.join(local_path, f"{task_id}-data")
+    os.mkdir(local_path)
+
+    param_path = os.path.join(local_path, "parameters.json")
+    with open(param_path, 'w', encoding='utf-8') as f:
+        f.write(parameters.json())
+    f.close()
+
+    if phenotype_data is not None:
+        phenotype_data_file_path = os.path.join(local_path, "phenotypes.csv")
+        async with aiofiles.open(phenotype_data_file_path, 'wb') as out_file:
+            await out_file.write(phenotype_data)
+
+    # instantiate task
+    q.enqueue(run_immunespace_cellfie_image, task_id=task_id, group=group, apikey=apikey, parameters=parameters,
+              job_id=task_id, job_timeout=3600, result_ttl=-1)
     pWorker = Process(target=initWorker)
     pWorker.start()
     return {"task_id": task_id}
@@ -160,17 +196,22 @@ def get_task_status(task_id: str):
     except:
         raise HTTPException(status_code=404, detail="Not found")
 
+
 @app.get("/cellfie/task/metadata/{task_id}")
 def get_task_metadata(task_id: str):
     try:
         task_mapping_entry = {"task_id": task_id}
-        entry = mongo_db_email_task_mapping_column.find(task_mapping_entry, {"_id": 0, "task_id": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1})
+        entry = mongo_db_email_task_mapping_column.find(task_mapping_entry,
+                                                        {"_id": 0, "task_id": 1, "status": 1, "date_created": 1,
+                                                         "start_date": 1, "end_date": 1})
         return loads(dumps(entry.next()))
     except:
         raise HTTPException(status_code=404, detail="Not found")
 
+
 @app.get("/cellfie/task/results/{task_id}/{filename}")
-def get_task_result(task_id: str, filename: str = Path(..., description="Valid file name values include: detailScoring, input, phenotypes, score, score_binary, & taskInfo")):
+def get_task_result(task_id: str, filename: str = Path(...,
+                                                       description="Valid file name values include: detailScoring, input, phenotypes, score, score_binary, & taskInfo")):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     dir_path = os.path.join(local_path, f"{task_id}-data")
     file_path = os.path.join(dir_path, f"{filename}.csv")
@@ -199,17 +240,54 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
     global_value = parameters.Percentile if parameters.PercentileOrValue == "percentile" else parameters.Value
     local_values = f"{parameters.PercentileLow} {parameters.PercentileHigh}" if parameters.PercentileOrValue == "percentile" else f"{parameters.ValueLow} {parameters.ValueHigh}"
 
-    client.containers.run("hmasson/cellfie-standalone-app:v2",
-                          volumes={
-                              os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
-                              os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
-                          },
-                          name=task_id,
-                          working_dir="/input",
-                          privileged=True,
-                          remove=True,
-                          command=f"/data/input.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
-                          )
+    image = "hmasson/cellfie-standalone-app:v2"
+    volumes = {
+        os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
+        os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
+    }
+    command = f"/data/input.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
+    client.containers.run(image, volumes=volumes, name=task_id, working_dir="/input", privileged=True, remove=True,
+                          command=command)
+
+    newvalues = {"$set": {"end_date": datetime.datetime.utcnow()}}
+    mongo_db_email_task_mapping_column.update_one(task_mapping_entry, newvalues)
+
+
+def run_immunespace_cellfie_image(task_id: str, group: str, apikey: str, parameters: Parameters):
+    local_path = os.getenv('HOST_ABSOLUTE_PATH')
+
+    task_mapping_entry = {"task_id": task_id}
+    newvalues = {"$set": {"start_date": datetime.datetime.utcnow()}}
+    mongo_db_email_task_mapping_column.update_one(task_mapping_entry, newvalues)
+
+    image = "txscience/tx-immunespace-groups:0.3"
+    volumes = {os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'}}
+    command = f"/usr/src/app/ImmGeneBySampleMatrix.R -g \"{group}\" -a \"{apikey}\" -o /data"
+    client.containers.run(image, volumes=volumes, name=f"{task_id}-immunespace-groups", working_dir="/data",
+                          privileged=True, remove=True, command=command)
+    logger.logger.warn(msg=f"{datetime.datetime.utcnow()} - finished txscience/tx-immunespace-groups:0.3")
+
+    image = "jdr0887/fuse-mapper-immunespace:0.1"
+    volumes = {os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'}}
+    #actual command is ENTRYPOINT in Dockerfile for this image
+    command = f"-i /data/geneBySampleMatrix.csv -o /data/cellfie-input.csv"
+    client.containers.run(image, volumes=volumes, name=f"{task_id}-immunespace-mapper", working_dir="/data",
+                          privileged=True, remove=True, command=command)
+    logger.logger.warn(msg=f"{datetime.datetime.utcnow()} - finished fuse-mapper-immunespace:0.1")
+
+    global_value = parameters.Percentile if parameters.PercentileOrValue == "percentile" else parameters.Value
+    local_values = f"{parameters.PercentileLow} {parameters.PercentileHigh}" if parameters.PercentileOrValue == "percentile" else f"{parameters.ValueLow} {parameters.ValueHigh}"
+
+    image = "hmasson/cellfie-standalone-app:v2"
+    volumes = {
+        os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
+        os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'}
+    }
+    #actual command is ENTRYPOINT in Dockerfile for this image
+    command = f"/data/cellfie-input.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
+    client.containers.run(image, volumes=volumes, name=f"{task_id}-cellfie", working_dir="/input", privileged=True,
+                          remove=True, command=command)
+    logger.logger.warn(msg=f"{datetime.datetime.utcnow()} - finished hmasson/cellfie-standalone-app:v2")
 
     newvalues = {"$set": {"end_date": datetime.datetime.utcnow()}}
     mongo_db_email_task_mapping_column.update_one(task_mapping_entry, newvalues)
