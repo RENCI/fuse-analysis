@@ -4,7 +4,7 @@ import os
 import shutil
 import uuid
 from multiprocessing import Process
-from typing import Type, Optional, List
+from typing import Type, Optional
 
 import aiofiles
 import docker
@@ -17,8 +17,8 @@ from pydantic import BaseModel
 from redis import Redis
 from rq import Queue, Worker
 from rq.job import Job
-import logging
 from starlette.responses import StreamingResponse
+
 
 def as_form(cls: Type[BaseModel]):
     new_params = [
@@ -42,36 +42,17 @@ def as_form(cls: Type[BaseModel]):
 
 @as_form
 class Parameters(BaseModel):
-    Container: str = "hmasson/cellfie-standalone-app"
-    ContainerTag: str = "latest"
-    ArgumentsKeys: List[str] = [
-        "SampleNumber",
-        "Ref",
-        "ThreshType",
-        "PercentileOrValue",
-        "Percentile",
-        "Value",
-        "LocalThresholdType",
-        "PercentileLow",
-        "PercentileHigh",
-        "ValueLow",
-        "ValueHigh"
-    ]
-    ArgumentsValues: List[str] = [
-        "32",
-        "MT_recon_2_2_entrez.mat",
-        "local",
-        "value",
-        "25",
-        "5",
-        "minmaxmean",
-        "25",
-        "75",
-        "5",
-        "5"
-    ]
-    Command: str = "INPUT {SampleNumber} {Ref} {ThreshType} {PercentileOrValue} {Value} {LocalThresholdType} {ValueLow} {ValueHigh} OUTPUT"
-
+    SampleNumber: int = 32
+    Ref: str = "MT_recon_2_2_entrez.mat"
+    ThreshType: str = "local"
+    PercentileOrValue: str = "value"
+    Percentile: int = 25
+    Value: int = 5
+    LocalThresholdType: str = "minmaxmean"
+    PercentileLow: int = 25
+    PercentileHigh: int = 75
+    ValueLow: int = 5
+    ValueHigh: int = 5
 
 
 app = FastAPI()
@@ -100,6 +81,7 @@ mongo_db_immunespace_cellfie_submits_column = mongo_db["immunespace_cellfie_subm
 def initWorker():
     worker = Worker(q, connection=redis_connection)
     worker.work()
+
 
 @app.post("/cellfie/submit")
 async def cellfie_submit(email: str, parameters: Parameters = Depends(Parameters.as_form), expression_data: UploadFile = File(...),
@@ -229,7 +211,7 @@ def cellfie_results(task_id: str, filename: str = Path(...,
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     dir_path = os.path.join(local_path, f"{task_id}-data")
     file_path = os.path.join(dir_path, f"{filename}.csv")
-    if not os.path.isdir(dir_path) or len(os.listdir(dir_path)) < 5:
+    if not os.path.isdir(dir_path) or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Not found")
 
     def iterfile():
@@ -247,9 +229,6 @@ def cellfie_results(task_id: str, filename: str = Path(...,
 @app.post("/immunespace/download")
 async def immunespace_download(email: str, group: str, apikey: str):
     # write data to memory
-    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-    immunespace_download_id = str(uuid.uuid4())[:8]
-
     immunespace_download_query = {"email": email, "group_id": group, "apikey": apikey}
     projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
     entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
@@ -257,10 +236,13 @@ async def immunespace_download(email: str, group: str, apikey: str):
     if entry.count() > 0:
         return {"immunespace_download_id": entry.next()["immunespace_download_id"]}
     else:
+        immunespace_download_id = str(uuid.uuid4())[:8]
+
         task_mapping_entry = {"immunespace_download_id": immunespace_download_id, "email": email, "group_id": group, "apikey": apikey, "status": None,
                               "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
         mongo_db_immunespace_downloads_column.insert_one(task_mapping_entry)
 
+        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         local_path = os.path.join(local_path, f"{immunespace_download_id}-immunespace-data")
         os.mkdir(local_path)
 
@@ -288,6 +270,27 @@ def immunespace_download_metadata(immunespace_download_id: str):
         return loads(dumps(entry.next()))
     except:
         raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/immunespace/download/results/{immunespace_download_id}/{filename}")
+def immunespace_download_results(immunespace_download_id: str, filename: str = Path(...,
+                                                                                    description="Valid file name values include: geneBySampleMatrix & phenoDataMatrix")):
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    dir_path = os.path.join(local_path, f"{immunespace_download_id}-immunespace-data")
+    file_path = os.path.join(dir_path, f"{filename}.csv")
+    if not os.path.isdir(dir_path) or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    def iterfile():
+        try:
+            with open(file_path, mode="rb") as file_data:
+                yield from file_data
+        except:
+            raise Exception()
+
+    response = StreamingResponse(iterfile(), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=export.csv"
+    return response
 
 
 def run_immunespace_download(immunespace_download_id: str, group: str, apikey: str):
@@ -451,3 +454,5 @@ async def immunespace_cellfie_parameters(task_id: str):
 
     parameter_object = Parameters(**param_path_contents)
     return parameter_object.dict()
+
+
