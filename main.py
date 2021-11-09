@@ -20,9 +20,6 @@ from rq.job import Job
 import logging
 from starlette.responses import StreamingResponse
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 def as_form(cls: Type[BaseModel]):
     new_params = [
         inspect.Parameter(
@@ -253,19 +250,26 @@ async def immunespace_download(email: str, group: str, apikey: str):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     immunespace_download_id = str(uuid.uuid4())[:8]
 
-    task_mapping_entry = {"immunespace_download_id": immunespace_download_id, "email": email, "group_id": group, "apikey": apikey, "status": None,
-                          "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
-    mongo_db_immunespace_downloads_column.insert_one(task_mapping_entry)
+    immunespace_download_query = {"email": email, "group_id": group, "apikey": apikey}
+    projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+    entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
 
-    local_path = os.path.join(local_path, f"{immunespace_download_id}-immunespace-data")
-    os.mkdir(local_path)
+    if entry.count() > 0:
+        return {"immunespace_download_id": entry.next()["immunespace_download_id"]}
+    else:
+        task_mapping_entry = {"immunespace_download_id": immunespace_download_id, "email": email, "group_id": group, "apikey": apikey, "status": None,
+                              "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
+        mongo_db_immunespace_downloads_column.insert_one(task_mapping_entry)
 
-    # instantiate task
-    q.enqueue(run_immunespace_download, immunespace_download_id=immunespace_download_id, group=group, apikey=apikey, job_id=immunespace_download_id, job_timeout=3600,
-              result_ttl=-1)
-    p_worker = Process(target=initWorker)
-    p_worker.start()
-    return {"immunespace_download_id": immunespace_download_id}
+        local_path = os.path.join(local_path, f"{immunespace_download_id}-immunespace-data")
+        os.mkdir(local_path)
+
+        # instantiate task
+        q.enqueue(run_immunespace_download, immunespace_download_id=immunespace_download_id, group=group, apikey=apikey, job_id=immunespace_download_id, job_timeout=3600,
+                  result_ttl=-1)
+        p_worker = Process(target=initWorker)
+        p_worker.start()
+        return {"immunespace_download_id": immunespace_download_id}
 
 
 @app.get("/immunespace/download/ids/{email}")
