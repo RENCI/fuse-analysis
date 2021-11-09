@@ -437,3 +437,17 @@ async def cellfie_delete(task_id: str):
         raise HTTPException(status_code=404, detail="Not found")
 
     return {"status": "done"}
+
+
+@app.get("/immunespace/cellfie/parameters/{task_id}")
+async def immunespace_cellfie_parameters(task_id: str):
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    local_path = os.path.join(local_path, f"{task_id}-data")
+
+    param_path = os.path.join(local_path, "parameters.json")
+    with open(param_path) as f:
+        param_path_contents = eval(f.read())
+    f.close()
+
+    parameter_object = Parameters(**param_path_contents)
+    return parameter_object.dict()
