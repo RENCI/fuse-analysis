@@ -234,7 +234,17 @@ async def immunespace_download(email: str, group: str, apikey: str):
     entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
 
     if entry.count() > 0:
-        return {"immunespace_download_id": entry.next()["immunespace_download_id"]}
+        immunespace_download_id = entry.next()["immunespace_download_id"]
+
+        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+        local_path = os.path.join(local_path, f"{immunespace_download_id}-immunespace-data")
+        if os.path.exists(local_path) and len(os.listdir(local_path)) == 0:
+            q.enqueue(run_immunespace_download, immunespace_download_id=immunespace_download_id, group=group, apikey=apikey, job_id=immunespace_download_id, job_timeout=3600,
+                      result_ttl=-1)
+            p_worker = Process(target=initWorker)
+            p_worker.start()
+
+        return {"immunespace_download_id": immunespace_download_id}
     else:
         immunespace_download_id = str(uuid.uuid4())[:8]
 
@@ -268,6 +278,19 @@ def immunespace_download_metadata(immunespace_download_id: str):
         projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
         entry = mongo_db_immunespace_downloads_column.find(task_mapping_entry, projection)
         return loads(dumps(entry.next()))
+    except:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/immunespace/download/status/{immunespace_download_id}")
+def immunespace_download_status(immunespace_download_id: str):
+    try:
+        job = Job.fetch(immunespace_download_id, connection=redis_connection)
+        ret = {"status": job.get_status()}
+        task_mapping_entry = {"immunespace_download_id": immunespace_download_id}
+        new_values = {"$set": ret}
+        mongo_db_cellfie_submits_column.update_one(task_mapping_entry, new_values)
+        return ret
     except:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -454,5 +477,3 @@ async def immunespace_cellfie_parameters(task_id: str):
 
     parameter_object = Parameters(**param_path_contents)
     return parameter_object.dict()
-
-
