@@ -57,9 +57,15 @@ class Parameters(BaseModel):
 
 app = FastAPI()
 
+origins = [
+    f"http://{os.getenv('HOSTNAME')}:8000",
+    f"http://{os.getenv('HOSTNAME')}:80",
+    f"http://{os.getenv('HOSTNAME')}",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,7 +107,7 @@ async def cellfie_submit(email: str, parameters: Parameters = Depends(Parameters
         f.write(parameters.json())
     f.close()
 
-    file_path = os.path.join(local_path, "geneBySampleMatrix.csv")
+    file_path = os.path.join(local_path, expression_data.filename)
     async with aiofiles.open(file_path, 'wb') as out_file:
         content = await expression_data.read()
         await out_file.write(content)
@@ -330,7 +336,7 @@ def run_immunespace_download(immunespace_download_id: str, group: str, apikey: s
     client.containers.run(image, volumes=volumes, name=f"{immunespace_download_id}-immunespace-groups", working_dir="/data", privileged=True, remove=True, command=command)
     logger.logger.warn(msg=f"{datetime.datetime.utcnow()} - finished txscience/tx-immunespace-groups:0.3")
 
-    image = "jdr0887/fuse-mapper-immunespace:0.1"
+    image = "txscience/fuse-mapper-immunespace:0.1"
     volumes = {os.path.join(local_path, f"data/{immunespace_download_id}-immunespace-data"): {'bind': '/data', 'mode': 'rw'}}
     command = f"-g /data/geneBySampleMatrix.csv -p /data/phenoDataMatrix.csv"
     client.containers.run(image, volumes=volumes, name=f"{immunespace_download_id}-immunespace-mapper", working_dir="/data", privileged=True, remove=True, command=command)
