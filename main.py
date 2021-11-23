@@ -111,7 +111,7 @@ async def cellfie_submit(email: str, parameters: Parameters = Depends(Parameters
         f.write(parameters.json())
     f.close()
 
-    file_path = os.path.join(local_path, expression_data.filename)
+    file_path = os.path.join(local_path, "geneBySampleMatrix.csv")
     async with aiofiles.open(file_path, 'wb') as out_file:
         content = await expression_data.read()
         await out_file.write(content)
@@ -122,13 +122,13 @@ async def cellfie_submit(email: str, parameters: Parameters = Depends(Parameters
             await out_file.write(phenotype_data)
 
     # instantiate task
-    q.enqueue(run_cellfie_image, task_id=task_id, filename=expression_data.filename, parameters=parameters, job_id=task_id, job_timeout=3600, result_ttl=-1)
+    q.enqueue(run_cellfie_image, task_id=task_id, parameters=parameters, job_id=task_id, job_timeout=3600, result_ttl=-1)
     p_worker = Process(target=initWorker)
     p_worker.start()
     return {"task_id": task_id}
 
 
-def run_cellfie_image(task_id: str, filename: str, parameters: Parameters):
+def run_cellfie_image(task_id: str, parameters: Parameters):
     local_path = os.getenv('HOST_ABSOLUTE_PATH')
 
     job = Job.fetch(task_id, connection=redis_connection)
@@ -144,7 +144,7 @@ def run_cellfie_image(task_id: str, filename: str, parameters: Parameters):
         os.path.join(local_path, f"data/{task_id}-data"): {'bind': '/data', 'mode': 'rw'},
         os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
     }
-    command = f"/data/{filename} {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
+    command = f"/data/geneBySampleMatrix.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
     client.containers.run(image, volumes=volumes, name=task_id, working_dir="/input", privileged=True, remove=True, command=command)
 
     new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": job.get_status()}}
