@@ -10,8 +10,9 @@ import aiofiles
 import docker
 import pymongo
 from bson.json_util import dumps, loads
+from docker.errors import ContainerError
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, Path
-from fastapi import logger
+from fastapi.logger import logger
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
@@ -100,7 +101,7 @@ async def cellfie_submit(email: str, parameters: Parameters = Depends(Parameters
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     task_id = str(uuid.uuid4())
 
-    task_mapping_entry = {"task_id": task_id, "email": email, "status": None, "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
+    task_mapping_entry = {"task_id": task_id, "email": email, "status": None, "stderr": None, "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
     mongo_db_cellfie_submits_column.insert_one(task_mapping_entry)
 
     local_path = os.path.join(local_path, f"{task_id}-data")
@@ -145,7 +146,12 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
         os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
     }
     command = f"/data/geneBySampleMatrix.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
-    client.containers.run(image, volumes=volumes, name=task_id, working_dir="/input", privileged=True, remove=True, command=command)
+    try:
+        client.containers.run(image, volumes=volumes, name=task_id, working_dir="/input", privileged=True, remove=True, command=command)
+    except ContainerError as err:
+        new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": "failed", "stderr": err.stderr.decode('utf-8')}}
+        mongo_db_cellfie_submits_column.update_one(task_mapping_entry, new_values)
+        return
 
     new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": job.get_status()}}
     mongo_db_cellfie_submits_column.update_one(task_mapping_entry, new_values)
@@ -208,7 +214,7 @@ def cellfie_status(task_id: str):
 def cellfie_metadata(task_id: str):
     try:
         task_mapping_entry = {"task_id": task_id}
-        projection = {"_id": 0, "task_id": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+        projection = {"_id": 0, "task_id": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
         entry = mongo_db_cellfie_submits_column.find(task_mapping_entry, projection)
         return loads(dumps(entry.next()))
     except:
@@ -240,11 +246,12 @@ def cellfie_results(task_id: str, filename: str = Path(...,
 async def immunespace_download(email: str, group: str, apikey: str):
     # write data to memory
     immunespace_download_query = {"email": email, "group_id": group, "apikey": apikey}
-    projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+    projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
     entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
 
     if entry.count() > 0:
         immunespace_download_id = entry.next()["immunespace_download_id"]
+        mongo_db_immunespace_downloads_column.update_one({"immunespace_download_id": immunespace_download_id}, {"$set": {"status": None, "stderr": None}})
 
         local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         local_path = os.path.join(local_path, f"{immunespace_download_id}-immunespace-data")
@@ -258,7 +265,7 @@ async def immunespace_download(email: str, group: str, apikey: str):
     else:
         immunespace_download_id = str(uuid.uuid4())[:8]
 
-        task_mapping_entry = {"immunespace_download_id": immunespace_download_id, "email": email, "group_id": group, "apikey": apikey, "status": None,
+        task_mapping_entry = {"immunespace_download_id": immunespace_download_id, "email": email, "group_id": group, "apikey": apikey, "status": None, "stderr": None,
                               "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
         mongo_db_immunespace_downloads_column.insert_one(task_mapping_entry)
 
@@ -285,7 +292,7 @@ async def immunespace_download_ids(email: str):
 def immunespace_download_metadata(immunespace_download_id: str):
     try:
         task_mapping_entry = {"immunespace_download_id": immunespace_download_id}
-        projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+        projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
         entry = mongo_db_immunespace_downloads_column.find(task_mapping_entry, projection)
         return loads(dumps(entry.next()))
     except:
@@ -297,9 +304,7 @@ def immunespace_download_status(immunespace_download_id: str):
     try:
         job = Job.fetch(immunespace_download_id, connection=redis_connection)
         ret = {"status": job.get_status()}
-        task_mapping_entry = {"immunespace_download_id": immunespace_download_id}
-        new_values = {"$set": ret}
-        mongo_db_cellfie_submits_column.update_one(task_mapping_entry, new_values)
+        mongo_db_cellfie_submits_column.update_one({"immunespace_download_id": immunespace_download_id}, {"$set": ret})
         return ret
     except:
         raise HTTPException(status_code=404, detail="Not found")
@@ -337,14 +342,24 @@ def run_immunespace_download(immunespace_download_id: str, group: str, apikey: s
     image = "txscience/tx-immunespace-groups:0.3"
     volumes = {os.path.join(local_path, f"data/{immunespace_download_id}-immunespace-data"): {'bind': '/data', 'mode': 'rw'}}
     command = f"-g \"{group}\" -a \"{apikey}\" -o /data"
-    client.containers.run(image, volumes=volumes, name=f"{immunespace_download_id}-immunespace-groups", working_dir="/data", privileged=True, remove=True, command=command)
-    logger.logger.warn(msg=f"{datetime.datetime.utcnow()} - finished txscience/tx-immunespace-groups:0.3")
+    try:
+        client.containers.run(image, volumes=volumes, name=f"{immunespace_download_id}-immunespace-groups", working_dir="/data", privileged=True, remove=True, command=command)
+    except ContainerError as err:
+        new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": "failed", "stderr": err.stderr.decode('utf-8')}}
+        mongo_db_immunespace_downloads_column.update_one(task_mapping_entry, new_values)
+        return
+    logger.warn(msg=f"{datetime.datetime.utcnow()} - finished txscience/tx-immunespace-groups:0.3")
 
     image = "txscience/fuse-mapper-immunespace:0.1"
     volumes = {os.path.join(local_path, f"data/{immunespace_download_id}-immunespace-data"): {'bind': '/data', 'mode': 'rw'}}
     command = f"-g /data/geneBySampleMatrix.csv -p /data/phenoDataMatrix.csv"
-    client.containers.run(image, volumes=volumes, name=f"{immunespace_download_id}-immunespace-mapper", working_dir="/data", privileged=True, remove=True, command=command)
-    logger.logger.warn(msg=f"{datetime.datetime.utcnow()} - finished fuse-mapper-immunespace:0.1")
+    try:
+        client.containers.run(image, volumes=volumes, name=f"{immunespace_download_id}-immunespace-mapper", working_dir="/data", privileged=True, remove=True, command=command)
+    except ContainerError as err:
+        new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": "failed", "stderr": err.stderr.decode('utf-8')}}
+        mongo_db_immunespace_downloads_column.update_one(task_mapping_entry, new_values)
+        return
+    logger.warn(msg=f"{datetime.datetime.utcnow()} - finished fuse-mapper-immunespace:0.1")
 
     new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": job.get_status()}}
     mongo_db_immunespace_downloads_column.update_one(task_mapping_entry, new_values)
@@ -359,8 +374,8 @@ async def immunespace_cellfie_submit(immunespace_download_id: str, parameters: P
     local_path = os.path.join(local_path, f"{task_id}-data")
     os.mkdir(local_path)
 
-    task_mapping_entry = {"task_id": task_id, "immunespace_download_id": immunespace_download_id, "status": None, "date_created": datetime.datetime.utcnow(), "start_date": None,
-                          "end_date": None}
+    task_mapping_entry = {"task_id": task_id, "immunespace_download_id": immunespace_download_id, "status": None, "stderr": None, "date_created": datetime.datetime.utcnow(),
+                          "start_date": None, "end_date": None}
     mongo_db_immunespace_cellfie_submits_column.insert_one(task_mapping_entry)
 
     param_path = os.path.join(local_path, "parameters.json")
@@ -394,7 +409,12 @@ def run_immunespace_cellfie_image(task_id: str, immunespace_download_id: str, pa
         os.path.join(local_path, "CellFie/input"): {'bind': '/input', 'mode': 'rw'},
     }
     command = f"/immunespace-data/geneBySampleMatrix.csv {parameters.SampleNumber} {parameters.Ref} {parameters.ThreshType} {parameters.PercentileOrValue} {global_value} {parameters.LocalThresholdType} {local_values} /data"
-    client.containers.run(image, volumes=volumes, name=task_id, working_dir="/input", privileged=True, remove=True, command=command)
+    try:
+        client.containers.run(image, volumes=volumes, name=task_id, working_dir="/input", privileged=True, remove=True, command=command)
+    except ContainerError as err:
+        new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": "failed", "stderr": err.stderr.decode('utf-8')}}
+        mongo_db_immunespace_cellfie_submits_column.update_one(task_mapping_entry, new_values)
+        return
 
     new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": job.get_status()}}
     mongo_db_immunespace_cellfie_submits_column.update_one(task_mapping_entry, new_values)
@@ -439,7 +459,7 @@ async def cellfie_ids(email: str):
     task_mapping_entry = {"email": email}
     projection = {"_id": 0, "immunespace_download_id": 1}
     immunespace_download_identifiers = list(map(lambda a: a["immunespace_download_id"], mongo_db_immunespace_downloads_column.find(task_mapping_entry, projection)))
-    logger.logger.warn(msg=f"{immunespace_download_identifiers}")
+    logger.warn(msg=f"{immunespace_download_identifiers}")
     immunespace_download_query = {"immunespace_download_id": {"$in": immunespace_download_identifiers}}
     ret = list(map(lambda a: a, mongo_db_immunespace_cellfie_submits_column.find(immunespace_download_query, {"_id": 0, "task_id": 1})))
     return ret
@@ -449,7 +469,7 @@ async def cellfie_ids(email: str):
 def cellfie_metadata(task_id: str):
     try:
         task_mapping_entry = {"task_id": task_id}
-        projection = {"_id": 0, "task_id": 1, "immunespace_download_id": 1, "status": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+        projection = {"_id": 0, "task_id": 1, "immunespace_download_id": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
         entry = mongo_db_immunespace_cellfie_submits_column.find(task_mapping_entry, projection)
         return loads(dumps(entry.next()))
     except:
