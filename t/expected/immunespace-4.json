@@ -1,1 +1,11 @@
-{"immunespace_download_id":"test-immunespace-1","email":"tester@renci.org","group_id":"SDY61-9","apikey":"apikey|f486c6983c58c4a1f0339de75aa36692","status":"started","stderr":null,"date_created":"2022-01-08T04:05:12.910000+00:00","start_date":"2022-01-08T04:05:12.934000+00:00","end_date":null}
+{
+  "apikey": "apikey|f486c6983c58c4a1f0339de75aa36692",
+  "date_created": "xxx",
+  "email": "tester@renci.org",
+  "end_date": "xxx",
+  "group_id": "test-SDY61-9",
+  "immunespace_download_id": "test-immunespace-1",
+  "start_date": "xxx",
+  "status": "xxx",
+  "stderr": null
+}

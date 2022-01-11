@@ -83,7 +83,11 @@ sub dl_poll {
 sub exec_cmd {
     my ($ext) = $_[0] =~ /(\.[^.]+)$/;
     my $outfile = "./t/out/$_[0]";
-    my $cmd = $_[1] . " > $outfile 2> /dev/null";
+    my $parse_json = "";
+    if($ext eq ".json") {
+	$parse_json = "| python -m json.tool | jq --sort-keys ";
+    }
+    my $cmd = $_[1] . " 2> /dev/null $parse_json > $outfile";
     $dch = "";
     if($dry_run == 0) {
 	`$cmd`; 
@@ -117,6 +121,7 @@ sub json_struct {
 	local $/;
 	<$json_fh>
     };
+
     return decode_json($json_text);
 }
 

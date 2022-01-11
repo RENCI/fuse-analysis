@@ -1,1 +1,6 @@
-{"status":"deleted","message-mongo":"Deleted count=(1), Acknowledged=(True).","message-os":"","message-job":""}
+{
+  "message-job": "",
+  "message-mongo": "Deleted count=(1), Acknowledged=(True).",
+  "message-os": "",
+  "status": "deleted"
+}

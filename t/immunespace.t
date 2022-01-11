@@ -6,6 +6,7 @@
 # --no_download if you want to create the download outside of the test because you don't want to wait 
 #
 # Dependencies:
+#   jq
 #   perl
 #     Test::File::Contents
 # To install:
@@ -79,11 +80,23 @@ $fn = "immunespace-2.json";
 files_eq(f($fn), g($fn, "immunespace/download/ids/${EMAIL}"),                                                                    "Get download ids for ${EMAIL}");
 $fn = "immunespace-3.json";
 files_eq(f($fn), g($fn, "immunespace/download/status/${dl_taskid}"),                                                             "Get status for taskid ${dl_taskid}");
- SKIP: {
-     skip "don't do metadata yet", 1 ;
-     $fn = "immunespace-4.json";
-     files_eq(f($fn), g($fn, "immunespace/download/metadata/${dl_taskid}"),                                                           "Get metadata for taskid ${dl_taskid}");
-}
+
+use Cpanel::JSON::XS;
+# remove ephemeral info from meatadata for comparison
+$fn = "immunespace-4.raw.json";
+my $raw_outfile = g($fn, "immunespace/download/metadata/${dl_taskid}");
+my $json = json_struct($raw_outfile);
+$json->{"status"} =      "xxx";
+$json->{"date_created"} ="xxx";
+$json->{"start_date"} =  "xxx";
+$json->{"end_date"} =    "xxx";
+$fn = "immunespace-4.json";
+open my $fh, ">", $raw_outfile;
+print $fh encode_json($json);
+close $fh;
+`cat $raw_outfile |python -m json.tool|jq --sort-keys > t/out/${fn}`;
+files_eq(f($fn), "t/out/${fn}",                                                                                               "Get metadata for taskid ${dl_taskid}");
+
 $fn = "immunespace-5.csv";
 files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/geneBySampleMatrix"),                                         "Get expression data for taskid ${dl_taskid}");
 $fn = "immunespace-6.csv";

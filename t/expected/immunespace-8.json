@@ -1,1 +1,6 @@
-{"status":"exception","message-mongo":"Wrong number of records deleted (0).Deleted count=(0), Acknowledged=(True).","message-os":"[Errno 2] No such file or directory: '/app/data/test-immunespace-1-immunespace-data'","message-job":"No such job: b'rq:job:test-immunespace-1'"}
+{
+  "message-job": "No such job: b'rq:job:test-immunespace-1'",
+  "message-mongo": "Wrong number of records deleted (0).Deleted count=(0), Acknowledged=(True).",
+  "message-os": "[Errno 2] No such file or directory: '/app/data/test-immunespace-1-immunespace-data'",
+  "status": "exception"
+}
