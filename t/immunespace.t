@@ -1,4 +1,9 @@
-# run: prove -v 1.t
+#
+#   prove -v t/immunespace.t :: [--verbose] [--no_download] [--dry_run]
+#
+# Assumes containers are built and running (use up.sh)
+# Represents a typical use case for download a dataset from immunespace using a predefined groupid ($GROUPID)
+# --no_download if you want to create the download outside of the test because you don't want to wait 
 #
 # Dependencies:
 #   perl
@@ -8,6 +13,7 @@
 #   cpan App::cpanminus
 #   # restart shell
 #   cpanm Test::Files
+#   cpanm Cpanel::JSON::XS
 # For more details:
 #   http://www.cpan.org/modules/INSTALL.html
 
@@ -15,85 +21,76 @@ use 5.30.0;
 use strict;
 use warnings;
 
-use Test::More tests => 15;
+use Getopt::Long qw(GetOptions);
+
+use Test::More tests => 9;
 use Test::File::Contents;
 
-my $EMAIL = "krobasky%40renci.org";
-my $GROUPID = "time_series_2";
-my $APIKEY = "apikey%7Cf486c6983c58c4a1f0339de75aa36692";
+use lib './t';
+use Support;
 
-my $dl_taskid = "7e44cd57";
-#my $dl_taskid = "9e9ffa3e";
-my $analysis_taskid = "f94ce7e3-eb79-47d9-a24e-825453cdc9c3";
+our $verbose = 0;
+our $no_download = 0;
+our $dry_run = 0;
+
+our $EMAIL = "tester%40renci.org"; 
+our $GROUPID = "test-SDY61-9"; 
+our $APIKEY = "apikey%7Cf486c6983c58c4a1f0339de75aa36692";
+
+our $dl_taskid = "test-immunespace-1";
+our $analysis_taskid = "f94ce7e3-eb79-47d9-a24e-825453cdc9c3";
+
+GetOptions('no_download' => \$no_download,
+	   'dry_run' => \$dry_run,
+	   'verbose' => \$verbose) or die "Usage: $0 --verbose --no_download\n";
+if($verbose){
+    print("+ no_download: $no_download\n");
+    print("+ dry_run: $dry_run\n");
+    print("+ verbose: $verbose\n");
+}
+
+#our @EXPORT = qw($verbose $no_download $dry_run $EMAL $GROUPID $APIKEY $dl_taskid $analysis_taskid);
+#use vars qw($verbose $no_download $dry_run $EMAIL $GROUPID $APIKEY $dl_taskid $analysis_taskid); 
+
+
+
 my $fn ;
 
-my $do_dl = 0;
-my $do_cellfie = 0;
-    
-print "dl enabled = ${do_dl}\n";
-print "cellfie enabled = ${do_cellfie}\n";
+if($no_download != 0){
+    print "+ DOWNLOAD DISABLED\n";
+}
 
-`rm ./t/out/*`;
+cleanup();
 
  SKIP: {
-     skip "don't do new dl yet", 1 unless ${do_dl} >= 1;
-     $fn="test1";
-     files_eq(f($fn), g($fn,"immunespace/download?email=${EMAIL}&group=${GROUPID}&apikey=${APIKEY}"), "Download  group $GROUPID"); 
-};
+     skip "Downloaded for $EMAIL,$GROUPID,$APIKEY,$dl_taskid created out of loop, don't execute download and wait", 1 unless ${no_download} == 0;
 
+     $fn = "immunespace-1.json";
+     files_eq(f($fn), p($fn,"immunespace/download?email=${EMAIL}&group=${GROUPID}&apikey=${APIKEY}&requested_id=${dl_taskid}", ""),   "Download group $GROUPID, taskid ${dl_taskid}");
 
-$fn = "test2";
-files_eq(f($fn), g($fn, "immunespace/download/ids/${EMAIL}"),                            "Get download ids for ${EMAIL}");
-$fn = "test3";
-files_eq(f($fn), g($fn, "immunespace/download/status/${dl_taskid}"),                     "Get status for taskid ${dl_taskid}");
-$fn = "test4";
-files_eq(f($fn), g($fn, "immunespace/download/metadata/${dl_taskid}"),                   "Get metadata for taskid ${dl_taskid}");
-$fn = "test5";
-files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/geneBySampleMatrix"), "Get expression data for taskid ${dl_taskid}");
-$fn = "test6";
-files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/phenoDataMatrix"),    "Get phenotype data for taskid ${dl_taskid}");
+     if($verbose){
+	 print("+ Wait for download...\n");
+     }
+     my $status = dl_poll($dl_taskid, 15);
+     is($status, "finished", "$dl_taskid downloaded with status $status");
+}
 
+$fn = "immunespace-2.json";
+files_eq(f($fn), g($fn, "immunespace/download/ids/${EMAIL}"),                                                                    "Get download ids for ${EMAIL}");
+$fn = "immunespace-3.json";
+files_eq(f($fn), g($fn, "immunespace/download/status/${dl_taskid}"),                                                             "Get status for taskid ${dl_taskid}");
  SKIP: {
-     skip "don't do analysis yet", 1 unless ${do_cellfie} >= 1;
-     files_eq(f("test7"), p("immunespace/cellfie/submit?immunespace_download_id=${dl_taskid}",
-	 "ValueLow=5&PercentileOrValue=value&Value=5&Ref=MT_recon_2_2_entrez.mat&SampleNumber=32&ValueHigh=5&ThreshType=local&PercentileLow=25&LocalThresholdType=minmaxmean&Percentile=25&PercentileHigh=75"),
-		      "WAIT [13min] Submit simple cellfie run with default parameters on download taskid ${dl_taskid}");
+     skip "don't do metadata yet", 1 ;
+     $fn = "immunespace-4.json";
+     files_eq(f($fn), g($fn, "immunespace/download/metadata/${dl_taskid}"),                                                           "Get metadata for taskid ${dl_taskid}");
 }
+$fn = "immunespace-5.csv";
+files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/geneBySampleMatrix"),                                         "Get expression data for taskid ${dl_taskid}");
+$fn = "immunespace-6.csv";
+files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/phenoDataMatrix"),                                            "Get phenotype data for taskid ${dl_taskid}");
+# In a typical use case, never delete data; see documentation
+$fn = "immunespace-7.json";
+files_eq(f($fn), d($fn, "immunespace/download/delete/${dl_taskid}"),                                                             "Delete a the downloaded groupid (status=deleted)");
+$fn = "immunespace-8.json";
+files_eq(f($fn), d($fn, "immunespace/download/delete/${dl_taskid}"),                                                             "Delete a the downloaded groupid (status=exception)");
 
-$fn = "test8";
-files_eq(f($fn),  g($fn, "immunespace/cellfie/task_ids/${EMAIL}"),                        "Get cellfie job task_id's");
-$fn = "test9";
-files_eq(f($fn),  g($fn, "immunespace/cellfie/status/${analysis_taskid}"),                "Get cellfie job status");
-$fn = "test10";
-files_eq(f($fn), g($fn, "immunespace/cellfie/metadata/${analysis_taskid}"),              "Get cellfie job metadata");
-$fn = "test11";
-files_eq(f($fn), g($fn, "immunespace/cellfie/parameters/${analysis_taskid}"),            "Get cellfie run parameters");
-$fn = "test12";
-files_eq(f($fn), g($fn, "immunespace/cellfie/results/${analysis_taskid}/taskInfo"),      "Get cellfie results: taskInfo");
-$fn = "test13";
-files_eq(f($fn), g($fn, "immunespace/cellfie/results/${analysis_taskid}/score"),         "Get cellfie results: score");
-$fn = "test14";
-files_eq(f($fn), g($fn, "immunespace/cellfie/results/${analysis_taskid}/score_binary"),  "Get cellfie results: score_binary");
-$fn = "test15";
-files_eq(f($fn), g($fn, "immunespace/cellfie/results/${analysis_taskid}/detailScoring"), "Get cellfie results: detailScoring");
-# xxx add:  delete expression data, delete cellfie results data
-#file_contents_like ${file}, ${cmd}, ";
-
-
-# support functions
-sub g {
-    my $cmd=sprintf("curl -X 'GET' 'http://localhost:8000/%s' -H 'accept: application/json'", $_[1]);
-    `$cmd  2> /dev/null > ./t/out/$_[0].out`;
-    print("$cmd\n");
-    #return `${cmd}`;
-    return "./t/out/$_[0].out";
-}
-sub p {
-    my $cmd=sprintf("curl -X 'POST' 'http://localhost:8000/%s' -H 'accept: application/json' -d '%s'", $_[1], $_[2]);
-    `$cmd 2> /dev/null > ./t/out/$_[0].out`;
-    print("$cmd\n");
-    return "./t/out/$_[0].out";
-}
-sub f {
-    return "./t/expected/$_[0].out";
-}
