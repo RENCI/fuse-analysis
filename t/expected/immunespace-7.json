@@ -1,6 +1,5 @@
 {
-  "message-job": "",
-  "message-mongo": "Deleted count=(1), Acknowledged=(True).",
-  "message-os": "",
-  "status": "deleted"
+  "info": "Deleted count=(1), Acknowledged=(True)./n",
+  "status": "deleted",
+  "stderr": ""
 }

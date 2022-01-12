@@ -20,6 +20,7 @@ from rq import Queue, Worker
 from rq.job import Job
 from starlette.responses import StreamingResponse
 
+import traceback
 
 def as_form(cls: Type[BaseModel]):
     new_params = [
@@ -86,6 +87,7 @@ mongo_client = pymongo.MongoClient('mongodb://%s:%s@tx-persistence:27017/test' %
 mongo_db = mongo_client["test"]
 mongo_db_cellfie_submits_column = mongo_db["cellfie_submits"]
 mongo_db_immunespace_downloads_column = mongo_db["immunespace_downloads"]
+#xxxmongo_db_immunespace_downloads_column.createIndex({"immunespace_download_taskid": 1})
 mongo_db_immunespace_cellfie_submits_column = mongo_db["immunespace_cellfie_submits"]
 
 
@@ -314,15 +316,22 @@ async def immunespace_download_delete(immunespace_download_id: str):
 
     # Delete may be requested while the download job is enqueued, so check that first:
     ret_job=""
+    ret_job_err=""
     try:
         job = Job.fetch(immunespace_download_id, connection=redis_connection)
-        job.delete(remove_from_queue=True)
+        if job == None:
+            ret_job="No job found in queue. \n"
+        else:
+            job = job.delete(remove_from_queue=True)
     except Exception as e:
         # job is not expected to be on queue so don't change deleted_status from "done"
-        ret_job += str(e)
+        ret_job_err += "! Exception {0} occurred while deleting job from queue: message=[{1}] \n! traceback=\n{2}\n".format(type(e), e, traceback.format_exc())
+                        
+        delete_status = "exception"
 
     # Assuming the job already executed, remove any database records
     ret_mongo=""
+    ret_mongo_err=""
     try:
         task_query = {"immunespace_download_id": immunespace_download_id}
         ret = mongo_db_immunespace_downloads_column.delete_one(task_query)
@@ -330,32 +339,40 @@ async def immunespace_download_delete(immunespace_download_id: str):
         delete_status = "deleted"
         if ret.acknowledged != True:
             delete_status = "failed"
-            ret_mongo += "ret.acknoledged not True."
+            ret_mongo += "ret.acknoledged not True.\n"
         if ret.deleted_count != 1:
             # should never happen if index was created for this field
             delete_status = "failed"
-            ret_mongo += "Wrong number of records deleted ("+str(ret.deleted_count)+")."
-        ret_mongo += "Deleted count=("+str(ret.deleted_count)+"), Acknowledged=("+str(ret.acknowledged)+")."
+            ret_mongo += "Wrong number of records deleted ("+str(ret.deleted_count)+")./n"
+        ## xxx
+        # could check if there are any remaining; but this should instead be enforced by creating an index for this columnxs
+        # could check ret.raw_result['n'] and ['ok'], but 'ok' seems to always be 1.0, and 'n' is the same as deleted_count
+        ##
+        ret_mongo += "Deleted count=("+str(ret.deleted_count)+"), Acknowledged=("+str(ret.acknowledged)+")./n"
     except Exception as e:
-        ret_mongo += str(e)
+        ret_mongo_err += "! Exception {0} occurred while deleting job from database, message=[{1}] \n! traceback=\n{2}\n".format(type(e), e, traceback.format_exc())
+
         delete_status = "exception"
         
     # Data are cached on a mounted filesystem, unlink that too if it's there
     ret_os=""
+    ret_os_err=""
     try:
         local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         local_path = os.path.join(local_path, immunespace_download_id + f"-immunespace-data")
         
         shutil.rmtree(local_path,ignore_errors=False)
     except Exception as e:
-        ret_os += str(e)
+        ret_os_err += "! Exception {0} occurred while deleting job from filesystem, message=[{1}] \n! traceback=\n{2}\n".format(type(e), e, traceback.format_exc())
+
         delete_status = "exception"
 
+    ret_message = ret_job + ret_mongo + ret_os
+    ret_err_message = ret_job_err + ret_mongo_err + ret_os_err
     return {
         "status": delete_status,
-        "message-mongo": ret_mongo,
-        "message-os": ret_os,
-        "message-job": ret_job
+        "info": ret_message,
+        "stderr": ret_err_message,
     }
     
 @app.get("/immunespace/download/ids/{email}")
@@ -371,9 +388,19 @@ def immunespace_download_metadata(immunespace_download_id: str):
         task_mapping_entry = {"immunespace_download_id": immunespace_download_id}
         projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
         entry = mongo_db_immunespace_downloads_column.find(task_mapping_entry, projection)
-        return loads(dumps(entry.next()))
-    except:
-        raise HTTPException(status_code=404, detail="Not found")
+
+        job = Job.fetch(immunespace_download_id, connection=redis_connection)
+        status = job.get_status()
+        meta_data = loads(dumps(entry.next()))
+        if status != meta_data["status"]:
+            meta_data["status"] = status
+            # xxx the following doesn't work, fix it
+            # mongo_db_immunespace_downloads_column.update_one(task_mapping_entry, {"$set", {"status": status}} )
+
+        return meta_data
+    except Exception as e:
+        detailstr = "! Exception {0} occurred while retrieving job_id={1}, message=[{2}] \n! traceback=\n{3}\n".format(type(e), immunespace_download_id, e, traceback.format_exc())
+        raise HTTPException(status_code=404, detail="Not found; " + detailstr)
 
 
 @app.get("/immunespace/download/status/{immunespace_download_id}")
@@ -382,6 +409,7 @@ def immunespace_download_status(immunespace_download_id: str):
         job = Job.fetch(immunespace_download_id, connection=redis_connection)
         status = job.get_status()
         if (status == "failed"):
+            # If job failed, add more detail
             immunespace_download_query = {"immunespace_download_id": immunespace_download_id}
             projection = {"_id": 0, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
             entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
@@ -394,8 +422,9 @@ def immunespace_download_status(immunespace_download_id: str):
 
         mongo_db_cellfie_submits_column.update_one({"immunespace_download_id": immunespace_download_id}, {"$set": ret})
         return ret
-    except:
-        raise HTTPException(status_code=404, detail="Not found")
+    except Exception as e:
+        raise HTTPException(status_code=404,
+                            detail="! Exception {0} occurred while checking job status for ({1}), message=[{2}] \n! traceback=\n{3}\n".format(type(e), e, traceback.format_exc(), immunespace_download_id))
 
 
 @app.get("/immunespace/download/results/{immunespace_download_id}/{filename}")

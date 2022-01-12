@@ -1,6 +1,5 @@
 {
-  "message-job": "No such job: b'rq:job:test-immunespace-1'",
-  "message-mongo": "Wrong number of records deleted (0).Deleted count=(0), Acknowledged=(True).",
-  "message-os": "[Errno 2] No such file or directory: '/app/data/test-immunespace-1-immunespace-data'",
-  "status": "exception"
+  "info": "Wrong number of records deleted (0)./nDeleted count=(0), Acknowledged=(True)./n",
+  "status": "exception",
+  "stderr": "! Exception <class 'rq.exceptions.NoSuchJobError'> occurred while deleting job from queue: message=[No such job: b'rq:job:test-immunespace-1'] \n! traceback=\nTraceback (most recent call last):\n  File \"./app/main.py\", line 321, in immunespace_download_delete\n    job = Job.fetch(immunespace_download_id, connection=redis_connection)\n  File \"/usr/local/lib/python3.7/site-packages/rq/job.py\", line 337, in fetch\n    job.refresh()\n  File \"/usr/local/lib/python3.7/site-packages/rq/job.py\", line 578, in refresh\n    raise NoSuchJobError('No such job: {0}'.format(self.key))\nrq.exceptions.NoSuchJobError: No such job: b'rq:job:test-immunespace-1'\n\n! Exception <class 'FileNotFoundError'> occurred while deleting job from filesystem, message=[[Errno 2] No such file or directory: '/app/data/test-immunespace-1-immunespace-data'] \n! traceback=\nTraceback (most recent call last):\n  File \"./app/main.py\", line 364, in immunespace_download_delete\n    shutil.rmtree(local_path,ignore_errors=False)\n  File \"/usr/local/lib/python3.7/shutil.py\", line 485, in rmtree\n    onerror(os.lstat, path, sys.exc_info())\n  File \"/usr/local/lib/python3.7/shutil.py\", line 483, in rmtree\n    orig_st = os.lstat(path)\nFileNotFoundError: [Errno 2] No such file or directory: '/app/data/test-immunespace-1-immunespace-data'\n\n"
 }
