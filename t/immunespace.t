@@ -15,6 +15,7 @@
 #   # restart shell
 #   cpanm Test::Files
 #   cpanm Cpanel::JSON::XS
+#   cpanm Switch
 # For more details:
 #   http://www.cpan.org/modules/INSTALL.html
 
@@ -67,43 +68,30 @@ cleanup();
      skip "Downloaded for $EMAIL,$GROUPID,$APIKEY,$dl_taskid created out of loop, don't execute download and wait", 1 unless ${no_download} == 0;
 
      $fn = "immunespace-1.json";
-     files_eq(f($fn), p($fn,"immunespace/download?email=${EMAIL}&group=${GROUPID}&apikey=${APIKEY}&requested_id=${dl_taskid}", ""),   "Download group $GROUPID, taskid ${dl_taskid}");
-
+     files_eq(f($fn), cmd("POST",$fn,"immunespace/download?email=${EMAIL}&group=${GROUPID}&apikey=${APIKEY}&requested_id=${dl_taskid}", ""), "Download group $GROUPID, taskid ${dl_taskid}");
+     
      if($verbose){
 	 print("+ Wait for download...\n");
      }
      my $status = dl_poll($dl_taskid, 15);
-     is($status, "finished", "$dl_taskid downloaded with status $status");
+     is($status, "finished",                                                                                                                "$dl_taskid downloaded with status $status");
 }
 
 $fn = "immunespace-2.json";
-files_eq(f($fn), g($fn, "immunespace/download/ids/${EMAIL}"),                                                                    "Get download ids for ${EMAIL}");
+files_eq(f($fn), cmd("GET",    $fn, "immunespace/download/ids/${EMAIL}"),                                                                    "Get download ids for ${EMAIL}");
 $fn = "immunespace-3.json";
-files_eq(f($fn), g($fn, "immunespace/download/status/${dl_taskid}"),                                                             "Get status for taskid ${dl_taskid}");
-
-use Cpanel::JSON::XS;
-# remove ephemeral info from meatadata for comparison
-$fn = "immunespace-4.raw.json";
-my $raw_outfile = g($fn, "immunespace/download/metadata/${dl_taskid}");
-my $json = json_struct($raw_outfile);
-$json->{"status"} =      "xxx";
-$json->{"date_created"} ="xxx";
-$json->{"start_date"} =  "xxx";
-$json->{"end_date"} =    "xxx";
-$fn = "immunespace-4.json";
-open my $fh, ">", $raw_outfile;
-print $fh encode_json($json);
-close $fh;
-`cat $raw_outfile |python -m json.tool|jq --sort-keys > t/out/${fn}`;
-files_eq(f($fn), "t/out/${fn}",                                                                                               "Get metadata for taskid ${dl_taskid}");
-
+files_eq(f($fn), cmd("GET",    $fn, "immunespace/download/status/${dl_taskid}"),                                                             "Get status for taskid ${dl_taskid}");
+$fn="immunespace-4.json";
+generalize_output($fn, cmd("GET", rawf($fn), "immunespace/download/metadata/${dl_taskid}"), ["status", "date_created", "start_date", "end_date"]);
+files_eq(f($fn), "t/out/${fn}",                                                                                                           "Get metadata for taskid ${dl_taskid}");
 $fn = "immunespace-5.csv";
-files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/geneBySampleMatrix"),                                         "Get expression data for taskid ${dl_taskid}");
+files_eq(f($fn), cmd("GET",    $fn, "immunespace/download/results/${dl_taskid}/geneBySampleMatrix"),                                         "Get expression data for taskid ${dl_taskid}");
 $fn = "immunespace-6.csv";
-files_eq(f($fn), g($fn, "immunespace/download/results/${dl_taskid}/phenoDataMatrix"),                                            "Get phenotype data for taskid ${dl_taskid}");
+files_eq(f($fn), cmd("GET",    $fn, "immunespace/download/results/${dl_taskid}/phenoDataMatrix"),                                            "Get phenotype data for taskid ${dl_taskid}");
 # In a typical use case, never delete data; see documentation
 $fn = "immunespace-7.json";
-files_eq(f($fn), d($fn, "immunespace/download/delete/${dl_taskid}"),                                                             "Delete a the downloaded groupid (status=deleted)");
-$fn = "immunespace-8.json";
-files_eq(f($fn), d($fn, "immunespace/download/delete/${dl_taskid}"),                                                             "Delete a the downloaded groupid (status=exception)");
+files_eq(f($fn), cmd("DELETE", $fn, "immunespace/download/delete/${dl_taskid}"),                                                             "Delete a the downloaded groupid (status=deleted)");
+$fn="immunespace-8.json";
+generalize_output($fn, cmd("DELETE", rawf($fn), "immunespace/download/delete/${dl_taskid}"), ["stderr"]);
+files_eq(f($fn), "t/out/${fn}",                                                                                                              "Delete a the downloaded groupid (status=exception)");
 

@@ -11,7 +11,7 @@ import docker
 import pymongo
 from bson.json_util import dumps, loads
 from docker.errors import ContainerError
-from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, Path
+from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, Path, Query
 from fastapi.logger import logger
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -243,8 +243,12 @@ def cellfie_results(task_id: str, filename: str = Path(...,
     return response
 
 
-@app.post("/immunespace/download")
-async def immunespace_download(email: str, group: str, apikey: str, requested_id: Optional[str] = None, summary = "Download an ImmPort gene expression data set from Immunespace"):
+@app.post("/immunespace/download", summary = "Download an ImmPort gene expression data set from Immunespace")
+async def immunespace_download(email: str = Query(default="me@email.com", description="Use your email as a key to retrieve all your submitted jobs."),
+                               group: str = Query(default="SDY61-9", description="Immunespace calls this a 'Label' in their 'My Groups Dashboard'. Create the group there and pass the label here to import the participants saved in that group."),
+                               apikey: str = Query(default=None, description="Create an apikey with Immunespace and past it here, including the 'api|...' prefix."),
+                               requested_id: Optional[str] = Query(default=None, description="WARNING: Leave blank; requesting multiple, non-unique id's may have unpredictable results on the server. This argument is for testing purposes only.")
+                               ):
     '''
     To use this endpoint:
     - 1. Register with  Immunespace
@@ -252,6 +256,7 @@ async def immunespace_download(email: str, group: str, apikey: str, requested_id
     - 3. Specify the API key (_apikey_), Group ID(_group_), and an (arbitrary) email address (_email_) to submit a job for executing the download
     - 4. Poll the _status_ endpoint to check for the job to be 'finished'
     - 5. Retrieve your datasets with download/results endpoint or analyze directly with cellfie/submit
+    Endpoint returns the id of the job.
     '''
     # write data to memory
     immunespace_download_query = {"email": email, "group_id": group, "apikey": apikey}
