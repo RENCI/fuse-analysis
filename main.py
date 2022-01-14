@@ -245,7 +245,7 @@ def cellfie_results(task_id: str, filename: str = Path(...,
 @app.post("/immunespace/download", summary = "Download an ImmPort gene expression data set from Immunespace")
 async def immunespace_download(email: str = Query(default="me@email.com", description="Use your email as a key to retrieve all your submitted jobs."),
                                group: str = Query(default="SDY61-9", description="Immunespace calls this a 'Label' in their 'My Groups Dashboard'. Create the group there and pass the label here to import the participants saved in that group."),
-                               apikey: str = Query(default=None, description="Create an apikey with Immunespace and past it here, including the 'api|...' prefix."))
+                               apikey: str = Query(default=None, description="Create an apikey with Immunespace and past it here, including the 'api|...' prefix.")):
     '''
     To use this endpoint:
     - 1. Register with  Immunespace
