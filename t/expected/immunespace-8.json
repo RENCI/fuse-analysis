@@ -1,0 +1,5 @@
+{
+  "info": "Wrong number of records deleted (0)./nDeleted count=(0), Acknowledged=(True)./n",
+  "status": "exception",
+  "stderr": "xxx"
+}

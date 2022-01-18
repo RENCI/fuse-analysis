@@ -20,6 +20,7 @@ from rq import Queue, Worker
 from rq.job import Job
 from starlette.responses import StreamingResponse
 
+import traceback
 
 def as_form(cls: Type[BaseModel]):
     new_params = [
@@ -86,6 +87,7 @@ mongo_client = pymongo.MongoClient('mongodb://%s:%s@tx-persistence:27017/test' %
 mongo_db = mongo_client["test"]
 mongo_db_cellfie_submits_column = mongo_db["cellfie_submits"]
 mongo_db_immunespace_downloads_column = mongo_db["immunespace_downloads"]
+#xxxmongo_db_immunespace_downloads_column.createIndex({"immunespace_download_taskid": 1})
 mongo_db_immunespace_cellfie_submits_column = mongo_db["immunespace_cellfie_submits"]
 
 
@@ -175,7 +177,6 @@ async def cellfie_delete(task_id: str):
 
     return {"status": "done"}
 
-
 @app.get("/cellfie/parameters/{task_id}")
 async def cellfie_parameters(task_id: str):
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -245,7 +246,9 @@ def cellfie_results(task_id: str, filename: str = Path(...,
 @app.post("/immunespace/download", summary = "Download an ImmPort gene expression data set from Immunespace")
 async def immunespace_download(email: str = Query(default="me@email.com", description="Use your email as a key to retrieve all your submitted jobs."),
                                group: str = Query(default="SDY61-9", description="Immunespace calls this a 'Label' in their 'My Groups Dashboard'. Create the group there and pass the label here to import the participants saved in that group."),
-                               apikey: str = Query(default=None, description="Create an apikey with Immunespace and past it here, including the 'api|...' prefix.")):
+                               apikey: str = Query(default=None, description="Create an apikey with Immunespace and past it here, including the 'api|...' prefix."),
+                               requested_id: Optional[str] = Query(default=None, description="WARNING: Leave blank; requesting multiple, non-unique id's may have unpredictable results on the server. This argument is for testing purposes only.")
+                               ):
     '''
     To use this endpoint:
     - 1. Register with  Immunespace
@@ -253,6 +256,7 @@ async def immunespace_download(email: str = Query(default="me@email.com", descri
     - 3. Specify the API key (_apikey_), Group ID(_group_), and an (arbitrary) email address (_email_) to submit a job for executing the download
     - 4. Poll the _status_ endpoint to check for the job to be 'finished'
     - 5. Retrieve your datasets with download/results endpoint or analyze directly with cellfie/submit
+    Endpoint returns the id of the job.
     '''
     # write data to memory
     immunespace_download_query = {"email": email, "group_id": group, "apikey": apikey}
@@ -274,6 +278,12 @@ async def immunespace_download(email: str = Query(default="me@email.com", descri
         return {"immunespace_download_id": immunespace_download_id}
     else:
         immunespace_download_id = str(uuid.uuid4())[:8]
+        if requested_id != None:
+            immunespace_download_query = {"immunespace_download_id": requested_id}
+            projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+            entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
+            if entry.count() == 0:
+                immunespace_download_id = requested_id
 
         task_mapping_entry = {"immunespace_download_id": immunespace_download_id, "email": email, "group_id": group, "apikey": apikey, "status": None, "stderr": None,
                               "date_created": datetime.datetime.utcnow(), "start_date": None, "end_date": None}
@@ -290,7 +300,86 @@ async def immunespace_download(email: str = Query(default="me@email.com", descri
         p_worker.start()
         return {"immunespace_download_id": immunespace_download_id}
 
+    
+@app.delete("/immunespace/download/delete/{immunespace_download_id}", summary="DANGER ZONE: Delete a downloaded object; this action is rarely justified.")
+async def immunespace_download_delete(immunespace_download_id: str):
+    '''
+    Delete cached data from the remote provider, identified by the provided download_id.
+    <br>**WARNING**: This will orphan associated analyses; only delete downloads if:
+    - the data are redacted.
+    - the system state needs to be reset, e.g., after testing.
+    - the sytem state needs to be corrected, e.g., after a bugfix.
 
+    <br>**Note**: If the object was changed on the data provider's server, the old copy should be versioned in order to keep an appropriate record of the input data for past dependent analyses.
+    <br>**Note**: Object will be deleted from disk regardless of whether or not it was found in the database. This can be useful for manual correction of erroneous system states.
+    <br>**Returns**: 
+    - status = 'deleted' if object is found in the database and 1 object successfully deleted.
+    - status = 'exception' if an exception is encountered while removing the object from the database or filesystem, regardless of whether or not the object was successfully deleted, see other returned fields for more information.
+    - status = 'failed' if 0 or greater than 1 object is not found in database.
+    '''
+    delete_status = "done"
+
+    # Delete may be requested while the download job is enqueued, so check that first:
+    ret_job=""
+    ret_job_err=""
+    try:
+        job = Job.fetch(immunespace_download_id, connection=redis_connection)
+        if job == None:
+            ret_job="No job found in queue. \n"
+        else:
+            job = job.delete(remove_from_queue=True)
+    except Exception as e:
+        # job is not expected to be on queue so don't change deleted_status from "done"
+        ret_job_err += "! Exception {0} occurred while deleting job from queue: message=[{1}] \n! traceback=\n{2}\n".format(type(e), e, traceback.format_exc())
+                        
+        delete_status = "exception"
+
+    # Assuming the job already executed, remove any database records
+    ret_mongo=""
+    ret_mongo_err=""
+    try:
+        task_query = {"immunespace_download_id": immunespace_download_id}
+        ret = mongo_db_immunespace_downloads_column.delete_one(task_query)
+        #<class 'pymongo.results.DeleteResult'>
+        delete_status = "deleted"
+        if ret.acknowledged != True:
+            delete_status = "failed"
+            ret_mongo += "ret.acknoledged not True.\n"
+        if ret.deleted_count != 1:
+            # should never happen if index was created for this field
+            delete_status = "failed"
+            ret_mongo += "Wrong number of records deleted ("+str(ret.deleted_count)+")./n"
+        ## xxx
+        # could check if there are any remaining; but this should instead be enforced by creating an index for this columnxs
+        # could check ret.raw_result['n'] and ['ok'], but 'ok' seems to always be 1.0, and 'n' is the same as deleted_count
+        ##
+        ret_mongo += "Deleted count=("+str(ret.deleted_count)+"), Acknowledged=("+str(ret.acknowledged)+")./n"
+    except Exception as e:
+        ret_mongo_err += "! Exception {0} occurred while deleting job from database, message=[{1}] \n! traceback=\n{2}\n".format(type(e), e, traceback.format_exc())
+
+        delete_status = "exception"
+        
+    # Data are cached on a mounted filesystem, unlink that too if it's there
+    ret_os=""
+    ret_os_err=""
+    try:
+        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+        local_path = os.path.join(local_path, immunespace_download_id + f"-immunespace-data")
+        
+        shutil.rmtree(local_path,ignore_errors=False)
+    except Exception as e:
+        ret_os_err += "! Exception {0} occurred while deleting job from filesystem, message=[{1}] \n! traceback=\n{2}\n".format(type(e), e, traceback.format_exc())
+
+        delete_status = "exception"
+
+    ret_message = ret_job + ret_mongo + ret_os
+    ret_err_message = ret_job_err + ret_mongo_err + ret_os_err
+    return {
+        "status": delete_status,
+        "info": ret_message,
+        "stderr": ret_err_message,
+    }
+    
 @app.get("/immunespace/download/ids/{email}")
 async def immunespace_download_ids(email: str):
     query = {"email": email}
@@ -304,20 +393,43 @@ def immunespace_download_metadata(immunespace_download_id: str):
         task_mapping_entry = {"immunespace_download_id": immunespace_download_id}
         projection = {"_id": 0, "immunespace_download_id": 1, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
         entry = mongo_db_immunespace_downloads_column.find(task_mapping_entry, projection)
-        return loads(dumps(entry.next()))
-    except:
-        raise HTTPException(status_code=404, detail="Not found")
+
+        job = Job.fetch(immunespace_download_id, connection=redis_connection)
+        status = job.get_status()
+        meta_data = loads(dumps(entry.next()))
+        if status != meta_data["status"]:
+            meta_data["status"] = status
+            # xxx the following doesn't work, fix it
+            # mongo_db_immunespace_downloads_column.update_one(task_mapping_entry, {"$set", {"status": status}} )
+
+        return meta_data
+    except Exception as e:
+        detailstr = "! Exception {0} occurred while retrieving job_id={1}, message=[{2}] \n! traceback=\n{3}\n".format(type(e), immunespace_download_id, e, traceback.format_exc())
+        raise HTTPException(status_code=404, detail="Not found; " + detailstr)
 
 
 @app.get("/immunespace/download/status/{immunespace_download_id}")
 def immunespace_download_status(immunespace_download_id: str):
     try:
         job = Job.fetch(immunespace_download_id, connection=redis_connection)
-        ret = {"status": job.get_status()}
+        status = job.get_status()
+        if (status == "failed"):
+            # If job failed, add more detail
+            immunespace_download_query = {"immunespace_download_id": immunespace_download_id}
+            projection = {"_id": 0, "email": 1, "group_id": 1, "apikey": 1, "status": 1, "stderr": 1, "date_created": 1, "start_date": 1, "end_date": 1}
+            entry = mongo_db_immunespace_downloads_column.find(immunespace_download_query, projection)
+            ret =  {
+                "status": status,
+                "message":loads(dumps(entry.next()))
+            }
+        else:
+            ret = {"status": status}
+
         mongo_db_cellfie_submits_column.update_one({"immunespace_download_id": immunespace_download_id}, {"$set": ret})
         return ret
-    except:
-        raise HTTPException(status_code=404, detail="Not found")
+    except Exception as e:
+        raise HTTPException(status_code=404,
+                            detail="! Exception {0} occurred while checking job status for ({1}), message=[{2}] \n! traceback=\n{3}\n".format(type(e), e, traceback.format_exc(), immunespace_download_id))
 
 
 @app.get("/immunespace/download/results/{immunespace_download_id}/{filename}")
