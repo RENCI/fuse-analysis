@@ -7,19 +7,20 @@
 #
 # Dependencies:
 #   jq
-#   perl
-#     Test::File::Contents
-# To install:
+#   perl libraries
+# To install perl libraries:
 #   
 #   cpan App::cpanminus
 #   # restart shell
-#   cpanm Test::Files
+#   cpanm Test::File
+#   cpanm Test::File::Contents
 #   cpanm Cpanel::JSON::XS
 #   cpanm Switch
+#   # restart shell
 # For more details:
 #   http://www.cpan.org/modules/INSTALL.html
 
-use 5.30.0;
+use 5.16.3;
 use strict;
 use warnings;
 
