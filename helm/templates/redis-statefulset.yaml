@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "fuse-analysis-cellfie.fullname" . }}-redis
+  labels:
+    {{- include "fuse-analysis-cellfie.labels" . | nindent 4 }}
+    type: cache
+spec:
+  serviceName: {{ include "fuse-analysis-cellfie.fullname" . }}-redis
+  selector:
+    matchLabels:
+      {{- include "fuse-analysis-cellfie.selectorLabels" . | nindent 6 }}
+      type: cache
+  template:
+    metadata:
+      {{- with .Values.redis.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "fuse-analysis-cellfie.selectorLabels" . | nindent 8 }}
+        type: cache
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}-redis
+          command:
+            - "redis-server"
+          args:
+            - "--port"
+            - "$(REDIS_PORT)"
+            - "--appendonly"
+            - "yes"
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          env:
+          - name: REDIS_PORT
+            value: {{ .Values.redis.service.port | quote }}
+          ports:
+            - name: redis-port
+              containerPort: {{ .Values.redis.service.port }}
+              protocol: TCP          
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts:
+          - mountPath: /data
+            name: {{ include "fuse-analysis-cellfie.fullname" . }}-redis-data
+      {{- with .Values.redis.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.redis.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.redis.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: {{ include "fuse-analysis-cellfie.fullname" . }}-redis-data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage.size }}
