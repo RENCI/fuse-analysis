@@ -1,8 +1,8 @@
 version: "3"
 
 services:
-  redis:
-    container_name: redis
+  fa-cellfie-redis:
+    container_name: fa-cellfie-redis
     image: redis:alpine
     restart: always
     environment: {}
@@ -12,27 +12,33 @@ services:
       - 6379
     command: ["--appendonly", "yes"]
 
-  tx-persistence:
-    container_name: tx-persistence
-    image: txscience/tx-persistence
+  fa-cellfie-pg-db:
+    container_name: fa-cellfie-pg-db
+    image: postgres:latest
     restart: always
-    env_file:
-      - .env
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - /var/lib/postgresql/data/
     expose:
-      - 27017
-      - 27018
-      - 27019
+      - 5432
+    ports:
+      - "5432:5432"
 
-  api:
-    container_name: api
+  fa-cellfie-api:
+    container_name: fa-cellfie-api
     build: .
     restart: always
-    env_file: .env
+    environment:
+      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@fa-cellfie-pg-db:5432/${POSTGRES_DB}"
+      HOST_ABSOLUTE_PATH: "${HOST_ABSOLUTE_PATH}"
     ports:
         - 8000:8000
     volumes:
         - /var/run/docker.sock:/var/run/docker.sock
         - ./data:/app/data
     depends_on:
-        - redis
-        - tx-persistence
+        - fa-cellfie-redis
+        - fa-cellfie-pg-db
