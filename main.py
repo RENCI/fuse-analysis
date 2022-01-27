@@ -86,6 +86,7 @@ mongo_db = mongo_client["test"]
 mongo_db_cellfie_submits_column = mongo_db["cellfie_submits"]
 mongo_db_immunespace_downloads_column = mongo_db["immunespace_downloads"]
 mongo_db_immunespace_cellfie_submits_column = mongo_db["immunespace_cellfie_submits"]
+mongo_db_dataset = mongo_db["datasets"]
 
 
 def initWorker():
@@ -149,6 +150,32 @@ def run_cellfie_image(task_id: str, parameters: Parameters):
 
     new_values = {"$set": {"end_date": datetime.datetime.utcnow(), "status": job.get_status()}}
     mongo_db_cellfie_submits_column.update_one(task_mapping_entry, new_values)
+
+
+@app.post("/upload")
+async def upload(expression_data: UploadFile = File(...), phenotype_data: Optional[bytes] = File(None), name: Optional[str] = None):
+
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    dataset_id = str(uuid.uuid4())
+
+    local_path = os.path.join(local_path, f"{dataset_id}-data")
+    os.mkdir(local_path)
+
+    file_path = os.path.join(local_path, "geneBySampleMatrix.csv")
+    async with aiofiles.open(file_path, 'wb') as out_file:
+        content = await expression_data.read()
+        await out_file.write(content)
+
+    upload_entry = {"dataset_id": dataset_id, "name": name, "expression_data_path": os.path.abspath(file_path)}
+
+    if phenotype_data is not None:
+        phenotype_data_file_path = os.path.join(local_path, "phenoDataMatrix.csv")
+        async with aiofiles.open(phenotype_data_file_path, 'wb') as out_file:
+            await out_file.write(phenotype_data)
+        upload_entry = {"dataset_id": dataset_id, "name": name, "expression_data_path": os.path.abspath(file_path), "phenotype_data": os.path.abspath(phenotype_data_file_path)}
+
+    mongo_db_dataset.insert_one(upload_entry)
+    return {"dataset_id": dataset_id}
 
 
 @app.delete("/cellfie/delete/{task_id}")
